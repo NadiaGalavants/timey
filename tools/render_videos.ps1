@@ -8,7 +8,7 @@
 
   Each video: 400x400, 6 fps, H.264, no audio.
     rest length (counting, ring empties, digits pink for the last 3 s)
-    + 3 s GO flash (#F2C9C9 / #8C0303)
+    + 2 s end blink: "0" flashes twice over the empty ring
     + 1 s ready frame (#8C1B39, chosen time, "tap ▶ to rest") - PiP keeps this last frame.
 #>
 param(
@@ -45,7 +45,7 @@ using System.Drawing.Text;
 using System.IO;
 
 public static class Timey {
-  const int W = 400, H = 400, FPS = 6;
+  const int W = 400, H = 400, FPS = 6, FLASH_SECONDS = 2;
   static Color C(string hex) { return ColorTranslator.FromHtml(hex); }
   static readonly Color BG = C("#8C031C"), CARD = C("#8C1B39"), ACCENT = C("#F299A9"),
                         FLASH = C("#8C0303"), TEXT = C("#F2C9C9"), TRACK = C("#6E0216");
@@ -78,7 +78,7 @@ public static class Timey {
   // frame index -> draw
   public static void DrawFrame(Graphics g, int len, int i) {
     Prep(g);
-    int countFrames = len * FPS, flashFrames = 3 * FPS;
+    int countFrames = len * FPS, flashFrames = FLASH_SECONDS * FPS;
     if (i < countFrames) {
       double t = (double)i / FPS;
       int remain = (int)Math.Ceiling(len - t);
@@ -90,10 +90,12 @@ public static class Timey {
       string s = Fmt(remain);
       Text(g, s, DigitSize(s), remain <= 3 ? ACCENT : TEXT, H / 2f + 4);
     } else if (i < countFrames + flashFrames) {
+      // rest over: "0" blinks twice (on/off every 0.5 s) over the empty ring
       int k = i - countFrames;
-      bool light = (k / 3) % 2 == 0;           // switch every 0.5 s
-      g.Clear(light ? TEXT : FLASH);
-      Text(g, "GO", 190f, light ? FLASH : TEXT, H / 2f + 4);
+      bool on = (k / 3) % 2 == 0;
+      g.Clear(BG);
+      using (var p = new Pen(TRACK, 22)) g.DrawEllipse(p, 30, 30, W - 60, H - 60);
+      if (on) Text(g, "0", DigitSize("0"), ACCENT, H / 2f + 4);
     } else {
       DrawReady(g, len);
     }
@@ -109,7 +111,7 @@ public static class Timey {
   }
 
   public static int Render(string ffmpeg, string outPath, int len) {
-    int total = (len + 4) * FPS;
+    int total = (len + FLASH_SECONDS + 1) * FPS;
     var psi = new ProcessStartInfo(ffmpeg,
       "-hide_banner -loglevel error -y -f rawvideo -pix_fmt bgra -s 400x400 -r 6 -i - " +
       "-an -c:v libx264 -preset slow -tune animation -crf 28 -g 6 -pix_fmt yuv420p " +

@@ -1,6 +1,6 @@
 # Timey
 
-A gym rest timer that floats over any iPhone app. Pick a rest length, tap play, go back to your series: a muted countdown video runs in Picture in Picture, flashes **GO**, then waits on the ready frame. Tap the square, then ▶, to rest again.
+A gym rest timer that floats over any iPhone app. Pick a rest length, tap play, go back to your series: a muted countdown video runs in Picture in Picture, blinks **0** twice, then resets to the ready frame. Tap the square, then ▶, to rest again.
 
 ## Install on iPhone
 
