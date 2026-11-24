@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Timey</title>
+<meta name="theme-color" content="#8C031C">
+<meta name="apple-mobile-web-app-title" content="Timey">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<style>
+  :root {
+    --bg: #8C031C; --card: #8C1B39; --accent: #F299A9; --flash: #8C0303; --text: #F2C9C9;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "Segoe UI", system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+    display: flex; flex-direction: column; align-items: center;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom));
+    min-height: 100dvh;
+  }
+  header { width: 100%; max-width: 440px; display: flex; align-items: center; justify-content: space-between; }
+  h1 { margin: 0; font-size: 34px; font-weight: 800; letter-spacing: -0.5px; }
+  #square {
+    width: 72px; height: 72px; border-radius: 14px; background: var(--card);
+    object-fit: cover; box-shadow: 0 4px 14px rgba(0,0,0,.3);
+  }
+  main { flex: 1; width: 100%; max-width: 440px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; }
+  .time { position: relative; text-align: center; }
+  #bigTime { font-size: 96px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; letter-spacing: -2px; }
+  #bigTime.resting { font-size: 52px; letter-spacing: 0; color: var(--accent); }
+  .time small { display: block; margin-top: 6px; font-size: 14px; opacity: .7; }
+  /* invisible native select over the big time: tapping it opens the iOS wheel */
+  #picker { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; font-size: 16px; }
+  #play {
+    width: min(230px, 62vw); aspect-ratio: 1; border-radius: 50%; border: 0;
+    background: var(--accent); color: var(--bg);
+    display: grid; place-items: center; cursor: pointer;
+    box-shadow: 0 10px 30px rgba(0,0,0,.35), inset 0 -6px 0 rgba(0,0,0,.08);
+    transition: transform .08s;
+  }
+  #play:active { transform: scale(.95); }
+  #play svg { width: 42%; height: 42%; }
+  .presets { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+  .chip {
+    border: 0; border-radius: 999px; padding: 10px 16px; min-width: 56px;
+    background: var(--card); color: var(--text); font: 600 17px/1 inherit; font-family: inherit;
+    font-variant-numeric: tabular-nums;
+  }
+  .chip.on { background: var(--text); color: var(--bg); }
+  .chip.add { font-size: 20px; padding: 8px 16px; }
+  .status { width: 100%; max-width: 440px; min-height: 64px; display: flex; align-items: center; justify-content: center; gap: 12px; text-align: center; font-size: 15px; line-height: 1.35; }
+  .status.warn { background: var(--flash); border: 1px solid var(--accent); border-radius: 14px; padding: 12px 14px; text-align: left; }
+  .status button { border: 0; border-radius: 10px; padding: 9px 16px; background: var(--text); color: var(--bg); font: 700 15px/1 inherit; font-family: inherit; }
+  .hint { font-size: 12px; opacity: .55; text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Timey</h1>
+    <video id="square" muted playsinline webkit-playsinline preload="auto" poster="icons/poster.png" autopictureinpicture></video>
+  </header>
+
+  <main>
+    <div class="time">
+      <div id="bigTime">15</div>
+      <small id="timeLabel">tap to change</small>
+      <select id="picker" aria-label="Rest length"></select>
+    </div>
+
+    <button id="play" aria-label="Start rest"></button>
+
+    <div class="presets" id="presets"></div>
+  </main>
+
+  <div class="status" id="status"></div>
+  <div class="hint">Long-press a preset to remove it</div>
+
+<script>
+(() => {
+  const LENGTHS = [];
+  for (let s = 5; s <= 295; s += 5) LENGTHS.push(s);
+  for (let s = 300; s <= 600; s += 30) LENGTHS.push(s);
+  const DEFAULT_PRESETS = [15, 30, 60, 90];
+
+  const $ = id => document.getElementById(id);
+  const video = $('square'), bigTime = $('bigTime'), picker = $('picker'),
+        playBtn = $('play'), presetsEl = $('presets'), statusEl = $('status'), timeLabel = $('timeLabel');
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+  };
+
+  const fmt = s => s < 60 ? String(s) : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const chipLabel = s => s < 60 ? `${s}s` : (s % 60 ? fmt(s) : `${s / 60}m`);
+  const nearest = s => LENGTHS.reduce((a, b) => Math.abs(b - s) < Math.abs(a - s) ? b : a);
+
+  let len = nearest(store.get('timey.len', 15));
+  let presets = store.get('timey.presets', DEFAULT_PRESETS).filter(s => LENGTHS.includes(s));
+
+  const isStandalone = window.navigator.standalone === true ||
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.matchMedia('(display-mode: fullscreen)').matches;
+  const pipSupported = (typeof video.webkitSupportsPresentationMode === 'function' &&
+      video.webkitSupportsPresentationMode('picture-in-picture')) || !!document.pictureInPictureEnabled;
+
+  const ICON_PLAY = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></svg>';
+  const ICON_RESTART = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v6h6"/></svg>';
+
+  // ---------- picker ----------
+  picker.innerHTML = LENGTHS.map(s => `<option value="${s}">${s < 60 ? s + ' sec' : fmt(s)}</option>`).join('');
+  picker.addEventListener('change', () => setLength(+picker.value));
+
+  // ---------- presets ----------
+  function renderPresets() {
+    presetsEl.innerHTML = '';
+    presets.forEach(s => {
+      const b = document.createElement('button');
+      b.className = 'chip' + (s === len ? ' on' : '');
+      b.textContent = chipLabel(s);
+      let timer, longPressed = false;
+      const start = () => { longPressed = false; timer = setTimeout(() => {
+        longPressed = true;
+        presets = presets.filter(p => p !== s); store.set('timey.presets', presets); renderPresets();
+        if (navigator.vibrate) navigator.vibrate(20);
+      }, 550); };
+      const cancel = () => clearTimeout(timer);
+      b.addEventListener('pointerdown', start);
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach(e => b.addEventListener(e, cancel));
+      b.addEventListener('contextmenu', e => e.preventDefault());
+      b.addEventListener('click', () => { if (!longPressed) setLength(s); });
+      presetsEl.appendChild(b);
+    });
+    const add = document.createElement('button');
+    add.className = 'chip add'; add.textContent = '+'; add.setAttribute('aria-label', 'Save current length as preset');
+    add.addEventListener('click', () => {
+      if (!presets.includes(len)) { presets = [...presets, len].sort((a, b) => a - b); store.set('timey.presets', presets); renderPresets(); }
+    });
+    presetsEl.appendChild(add);
+  }
+
+  // ---------- length / video ----------
+  function setLength(s) {
+    len = s;
+    store.set('timey.len', len);
+    picker.value = String(len);
+    video.src = `videos/rest-${len}.mp4`;
+    video.load();
+    renderPresets();
+    render();
+  }
+
+  // ---------- PiP ----------
+  function inPip() {
+    if (video.webkitPresentationMode) return video.webkitPresentationMode === 'picture-in-picture';
+    return document.pictureInPictureElement === video;
+  }
+  function enterPip() {
+    try {
+      if (typeof video.webkitSetPresentationMode === 'function' &&
+          video.webkitSupportsPresentationMode && video.webkitSupportsPresentationMode('picture-in-picture')) {
+        if (video.webkitPresentationMode !== 'picture-in-picture') video.webkitSetPresentationMode('picture-in-picture');
+        return;
+      }
+      if (document.pictureInPictureEnabled && document.pictureInPictureElement !== video) {
+        video.requestPictureInPicture().catch(err => { console.warn(err); render(); });
+      }
+    } catch (err) { console.warn(err); }
+  }
+  function closePip() {
+    video.pause();
+    try {
+      if (video.webkitPresentationMode === 'picture-in-picture') video.webkitSetPresentationMode('inline');
+      else if (document.pictureInPictureElement) document.exitPictureInPicture();
+    } catch (err) { console.warn(err); }
+    render();
+  }
+
+  // Play button: starts the rest and opens the square in one tap. Must stay synchronous for iOS.
+  playBtn.addEventListener('click', () => {
+    video.muted = true;
+    try { video.currentTime = 0; } catch {}
+    const p = video.play();
+    enterPip();
+    if (p && p.catch) p.catch(err => console.warn(err));
+  });
+
+  // Restart from the square: ▶ on a paused video jumps back to 0:00. Ended videos restart by themselves.
+  let wasEnded = false;
+  video.addEventListener('pause', () => { wasEnded = video.ended; });
+  video.addEventListener('play', () => {
+    if (!wasEnded && video.currentTime > 0.3) { try { video.currentTime = 0; } catch {} }
+    wasEnded = false;
+  });
+
+  // ---------- UI state ----------
+  const resting = () => !video.paused && !video.ended && video.currentTime < len;
+
+  function render() {
+    const r = resting();
+    bigTime.textContent = r ? 'resting…' : fmt(len);
+    bigTime.classList.toggle('resting', r);
+    timeLabel.textContent = r ? `${fmt(len)} rest` : (len < 60 ? 'seconds · tap to change' : 'tap to change');
+    playBtn.innerHTML = r ? ICON_RESTART : ICON_PLAY;
+    playBtn.setAttribute('aria-label', r ? 'Restart rest' : 'Start rest');
+
+    statusEl.className = 'status';
+    if (isStandalone || !pipSupported) {
+      statusEl.classList.add('warn');
+      statusEl.innerHTML = isStandalone
+        ? '<div><b>The floating square is blocked here.</b><br>iOS turns off Picture in Picture for full-screen web apps. Delete this icon, open Timey in Safari, tap Share → Add to Home Screen and switch <b>Open as Web App</b> off.</div>'
+        : '<div><b>Picture in Picture isn\'t available</b> in this browser. Open Timey in Safari on your iPhone.</div>';
+    } else if (inPip()) {
+      statusEl.innerHTML = '<span>Square is floating</span>';
+      const b = document.createElement('button'); b.textContent = 'Close'; b.addEventListener('click', closePip);
+      statusEl.appendChild(b);
+    } else {
+      statusEl.innerHTML = '<span>Press play, then open your series.<br>Tap the square, then ▶ to rest again.</span>';
+    }
+  }
+
+  ['play', 'pause', 'ended', 'seeked', 'enterpictureinpicture', 'leavepictureinpicture', 'webkitpresentationmodechanged']
+    .forEach(e => video.addEventListener(e, render));
+  video.addEventListener('timeupdate', () => {
+    const r = resting();
+    if (r !== bigTime.classList.contains('resting')) render();
+  });
+  document.addEventListener('visibilitychange', render);
+
+  setLength(len);
+})();
+</script>
+</body>
+</html>
