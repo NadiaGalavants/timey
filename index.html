@@ -33,7 +33,8 @@
   main { flex: 1; width: 100%; max-width: 440px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; }
   .time { position: relative; text-align: center; }
   #bigTime { font-size: 96px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; letter-spacing: -2px; }
-  #bigTime.resting { font-size: 52px; letter-spacing: 0; color: var(--accent); }
+  #bigTime.low { color: var(--accent); }
+  #bigTime.blink { visibility: hidden; }
   .time small { display: block; margin-top: 6px; font-size: 14px; opacity: .7; }
   /* invisible native select over the big time: tapping it opens the iOS wheel */
   #picker { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; font-size: 16px; }
@@ -58,6 +59,11 @@
   .status.warn { background: var(--flash); border: 1px solid var(--accent); border-radius: 14px; padding: 12px 14px; text-align: left; }
   .status button { border: 0; border-radius: 10px; padding: 9px 16px; background: var(--text); color: var(--bg); font: 700 15px/1 inherit; font-family: inherit; }
   .hint { font-size: 12px; opacity: .55; text-align: center; margin-top: 8px; }
+  .mode { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+  .mode span { opacity: .7; }
+  .seg { display: flex; background: var(--card); border-radius: 999px; padding: 3px; }
+  .seg button { border: 0; background: transparent; color: var(--text); border-radius: 999px; padding: 7px 12px; font: 600 13px/1 inherit; font-family: inherit; }
+  .seg button.on { background: var(--text); color: var(--bg); }
 </style>
 </head>
 <body>
@@ -76,6 +82,14 @@
     <button id="play" aria-label="Start rest"></button>
 
     <div class="presets" id="presets"></div>
+
+    <div class="mode">
+      <span>Square floats</span>
+      <div class="seg" role="group" aria-label="When the square floats">
+        <button data-mode="leave">when I leave</button>
+        <button data-mode="now">right away</button>
+      </div>
+    </div>
   </main>
 
   <div class="status" id="status"></div>
@@ -183,14 +197,29 @@
     render();
   }
 
-  // Play button: starts the rest and opens the square in one tap. Must stay synchronous for iOS.
+  // ---------- float mode ----------
+  let mode = store.get('timey.mode', 'leave') === 'now' ? 'now' : 'leave';
+  const segBtns = [...document.querySelectorAll('.seg button')];
+  function renderMode() { segBtns.forEach(b => b.classList.toggle('on', b.dataset.mode === mode)); }
+  segBtns.forEach(b => b.addEventListener('click', () => { mode = b.dataset.mode; store.set('timey.mode', mode); renderMode(); render(); }));
+  renderMode();
+
+  // Play button: starts the rest in one tap. Must stay synchronous for iOS.
   playBtn.addEventListener('click', () => {
     video.muted = true;
     try { video.currentTime = 0; } catch {}
     const p = video.play();
-    enterPip();
+    // "when I leave": the countdown plays inside Timey and the square opens as the page is hidden
+    if (mode === 'now' || inPip()) enterPip();
     if (p && p.catch) p.catch(err => console.warn(err));
   });
+
+  function floatOnLeave() {
+    if (mode === 'leave' && resting() && !inPip()) enterPip();
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') floatOnLeave(); });
+  window.addEventListener('pagehide', floatOnLeave);
+  window.addEventListener('blur', floatOnLeave);
 
   // Restart from the square: ▶ on a paused video jumps back to 0:00. Ended videos restart by themselves.
   let wasEnded = false;
@@ -201,13 +230,31 @@
   });
 
   // ---------- UI state ----------
-  const resting = () => !video.paused && !video.ended && video.currentTime < len;
+  // the video runs: rest length, then 2 s of "0" blinking, then the ready frame
+  const resting = () => !video.paused && !video.ended && video.currentTime < len + 2;
+
+  function renderTime() {
+    if (!resting()) { bigTime.textContent = fmt(len); bigTime.classList.remove('low', 'blink'); return; }
+    const t = video.currentTime;
+    if (t >= len) {
+      const on = Math.floor((t - len) * 2) % 2 === 0;   // 0 blinks twice, like the video
+      bigTime.textContent = '0';
+      bigTime.classList.add('low');
+      bigTime.classList.toggle('blink', !on);
+    } else {
+      const remain = Math.ceil(len - t - 1e-6);
+      bigTime.textContent = fmt(remain);
+      bigTime.classList.toggle('low', remain <= 3);
+      bigTime.classList.remove('blink');
+    }
+  }
+  function tick() { renderTime(); if (resting()) requestAnimationFrame(tick); }
 
   function render() {
     const r = resting();
-    bigTime.textContent = r ? 'resting…' : fmt(len);
-    bigTime.classList.toggle('resting', r);
-    timeLabel.textContent = r ? `${fmt(len)} rest` : (len < 60 ? 'seconds · tap to change' : 'tap to change');
+    renderTime();
+    if (r) requestAnimationFrame(tick);
+    timeLabel.textContent = r ? `of ${fmt(len)} · ▶ restarts` : (len < 60 ? 'seconds · tap to change' : 'tap to change');
     playBtn.innerHTML = r ? ICON_RESTART : ICON_PLAY;
     playBtn.setAttribute('aria-label', r ? 'Restart rest' : 'Start rest');
 
@@ -221,6 +268,12 @@
       statusEl.innerHTML = '<span>Square is floating</span>';
       const b = document.createElement('button'); b.textContent = 'Close'; b.addEventListener('click', closePip);
       statusEl.appendChild(b);
+    } else if (mode === 'leave' && r) {
+      statusEl.innerHTML = '<span>Counting. Swipe to your series and the square will float.</span>';
+      const b = document.createElement('button'); b.textContent = 'Stop'; b.addEventListener('click', closePip);
+      statusEl.appendChild(b);
+    } else if (mode === 'leave') {
+      statusEl.innerHTML = '<span>Press play, then swipe to your series.<br>Tap the square, then ▶ to rest again.</span>';
     } else {
       statusEl.innerHTML = '<span>Press play, then open your series.<br>Tap the square, then ▶ to rest again.</span>';
     }
@@ -228,9 +281,10 @@
 
   ['play', 'pause', 'ended', 'seeked', 'enterpictureinpicture', 'leavepictureinpicture', 'webkitpresentationmodechanged']
     .forEach(e => video.addEventListener(e, render));
+  let wasResting = false;
   video.addEventListener('timeupdate', () => {
     const r = resting();
-    if (r !== bigTime.classList.contains('resting')) render();
+    if (r !== wasResting) { wasResting = r; render(); }
   });
   document.addEventListener('visibilitychange', render);
 
