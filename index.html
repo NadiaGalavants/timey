@@ -63,7 +63,7 @@
 <body>
   <header>
     <h1>Timey</h1>
-    <video id="square" muted playsinline webkit-playsinline preload="auto" poster="icons/poster.png" autopictureinpicture></video>
+    <video id="square" muted playsinline webkit-playsinline preload="auto" autopictureinpicture></video>
   </header>
 
   <main>
@@ -150,7 +150,8 @@
     len = s;
     store.set('timey.len', len);
     picker.value = String(len);
-    video.src = `videos/rest-${len}.mp4`;
+    // #t=0.001 makes iOS Safari paint the first frame (the chosen time) before playing
+    video.src = `videos/rest-${len}.mp4#t=0.001`;
     video.load();
     renderPresets();
     render();
